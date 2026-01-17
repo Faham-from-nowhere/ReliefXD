@@ -1,3 +1,5 @@
+
+
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
@@ -49,21 +51,6 @@ function calculateConfidence(aiResult) {
   return Math.max(0, Math.min(confidence, 1));
 }
 
-function generateRandomLocation() {
-  const minLat = 28.50;
-  const maxLat = 32.75;
-  const minLng = 77.00;
-  const maxLng = 82.45;
-
-  const lat = minLat + Math.random() * (maxLat - minLat);
-  const lng = minLng + Math.random() * (maxLng - minLng);
-
-  return {
-    lat: +lat.toFixed(6),
-    lng: +lng.toFixed(6),
-  };
-}
-
 app.post("/api/analyze", async (req, res) => {
   try {
     const { description } = req.body;
@@ -72,32 +59,27 @@ app.post("/api/analyze", async (req, res) => {
       return res.status(400).json({ error: "Invalid description" });
     }
 
-    
     let aiResult = await analyzeRequest(description);
 
-    
     aiResult = normalizeSeverity(aiResult);
 
     const confidence = calculateConfidence(aiResult);
 
-    const location = generateRandomLocation();
+    console.log("Sending response !")
 
     res.json({
       ...aiResult,
-      confidence,
-      location,
+      confidence
     });
 
   } catch (error) {
     console.error("Backend Error:", error);
-
     res.status(500).json({
       urgency: "Medium",
       category: "Other",
-      summary: "Manual review required",
+      summary: "Service unavailable",
       resources: [],
-      confidence: 0.4,
-      location: generateRandomLocation(),
+      confidence: 0.4
     });
   }
 });
