@@ -6,10 +6,22 @@ import { AdminTableView } from './components/AdminTableView';
 import { LoginModal } from './components/LoginModal';
 import { Incident, AIAnalysisResult, UrgencyLevel, CategoryType } from './types/incident';
 
+// --- FIREBASE IMPORTS ---
+import { db } from '../firebase'; // Import the db instance we created
+import { 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  serverTimestamp,
+  Timestamp 
+} from 'firebase/firestore';
+
 const CURRENT_USER_ID = 'user-1';
 
 /* ================= BACKEND API ================= */
-
+// Kept exactly as you had it
 const analyzeWithBackend = async (
   description: string
 ): Promise<AIAnalysisResult> => {
@@ -27,31 +39,14 @@ const analyzeWithBackend = async (
 };
 
 /* ================= RANDOM LOCATION (DEMO ONLY) ================= */
-
 const generateRandomLocation = () => ({
   lat: (Math.random() * 160) - 80,
   lng: (Math.random() * 360) - 180,
 });
 
-/* ================= SAMPLE INCIDENT ================= */
-
-const sampleIncidents: Incident[] = [
-  {
-    id: '1',
-    description: 'Earthquake aftermath in Tokyo',
-    urgency: 'critical',
-    category: 'rescue',
-    summary: 'Structural collapse risk',
-    resources: ['Rescue Team'],
-    confidence: 95,
-    location: { lat: 35.6762, lng: 139.6503 },
-    timestamp: new Date(),
-    userId: 'user-2',
-  },
-];
-
 export default function App() {
-  const [incidents, setIncidents] = useState<Incident[]>(sampleIncidents);
+  // Initialize with empty array, data will come from Firestore
+  const [incidents, setIncidents] = useState<Incident[]>([]);
   const [selectedIncident, setSelectedIncident] = useState<Incident | null>(null);
   const [currentAnalysis, setCurrentAnalysis] = useState<AIAnalysisResult | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -64,8 +59,31 @@ export default function App() {
   const [locationStatus, setLocationStatus] =
     useState<'detecting' | 'detected' | 'denied' | 'unavailable'>('detecting');
 
-  /* ================= GEOLOCATION ================= */
+  /* ================= FIRESTORE SYNC ================= */
+  // This useEffect replaces your sampleIncidents
+  useEffect(() => {
+    // Query incidents collection, ordered by latest first
+    const q = query(collection(db, "incidents"), orderBy("timestamp", "desc"));
 
+    // Real-time listener
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetchedIncidents = snapshot.docs.map((doc) => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          ...data,
+          // Convert Firestore Timestamp to JS Date
+          timestamp: data.timestamp instanceof Timestamp ? data.timestamp.toDate() : new Date(),
+        } as Incident;
+      });
+      setIncidents(fetchedIncidents);
+    });
+
+    // Cleanup listener on unmount
+    return () => unsubscribe();
+  }, []);
+
+  /* ================= GEOLOCATION ================= */
   useEffect(() => {
     if (!navigator.geolocation) {
       setLocationStatus('unavailable');
@@ -83,14 +101,13 @@ export default function App() {
       },
       () => {
         setLocationStatus('denied');
-        setUserLocation(generateRandomLocation()); // demo fallback
+        setUserLocation(generateRandomLocation());
       },
       { enableHighAccuracy: true }
     );
   }, []);
 
   /* ================= ANALYZE REQUEST ================= */
-
   const handleAnalyze = useCallback(async (description: string) => {
     if (!userLocation) {
       alert('Waiting for location detection. Please try again.');
@@ -101,35 +118,39 @@ export default function App() {
     setCurrentAnalysis(null);
 
     try {
+      // 1. Analyze with your Python/Node backend
       const result = await analyzeWithBackend(description);
-
       setCurrentAnalysis(result);
 
-      const newIncident: Incident = {
-        id: Date.now().toString(),
+      // 2. Prepare data for Firestore
+      // Note: We don't manually add 'id', Firestore generates it
+      const newIncidentData = {
         description,
-        urgency: result.urgency.toLowerCase() as UrgencyLevel,
-        category: result.category.toLowerCase() as CategoryType,
+        urgency: result.urgency.toLowerCase(),
+        category: result.category.toLowerCase(),
         summary: result.summary,
         resources: result.resources,
         confidence: Math.round(result.confidence * 100),
         location: userLocation,
-        timestamp: new Date(),
+        timestamp: serverTimestamp(), // Use server time for consistency
         userId: CURRENT_USER_ID,
       };
 
-      setIncidents((prev) => [newIncident, ...prev]);
+      // 3. Write to Firestore
+      await addDoc(collection(db, "incidents"), newIncidentData);
+
+      // Note: We do NOT need to setIncidents here manually.
+      // The onSnapshot in the useEffect will detect the change and update the UI automatically.
 
     } catch (err) {
-      console.error('Backend error:', err);
-      alert('AI service unavailable');
+      console.error('Error processing incident:', err);
+      alert('Service unavailable or Database Error');
     } finally {
       setIsAnalyzing(false);
     }
   }, [userLocation]);
 
   /* ================= FILTERING ================= */
-
   const filteredIncidents = useMemo(() => {
     return isAdmin
       ? incidents
@@ -137,7 +158,6 @@ export default function App() {
   }, [incidents, isAdmin]);
 
   /* ================= STATS ================= */
-
   const criticalCount = filteredIncidents.filter(i => i.urgency === 'critical').length;
   const mediumCount = filteredIncidents.filter(i => i.urgency === 'medium').length;
   const safeCount = filteredIncidents.filter(i => i.urgency === 'safe').length;
